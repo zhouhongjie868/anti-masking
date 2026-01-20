@@ -49,10 +49,11 @@ column = "your_column"
     ```
 
 2.  **运行 Docker 容器:**
-    构建成功后，执行以下命令来运行 Docker 容器。请确保将 `config.toml` 文件挂载到容器中。
+    构建成功后，执行以下命令来运行 Docker 容器。请确保将 `config.toml` 文件挂载到容器中，并使用 `-d` 标志使其在后台运行。
     ```bash
-    docker run -p 8501:8501 -v $(pwd)/config.toml:/app/config.toml anti-masking
+    docker run -d -p 8501:8501 -v $(pwd)/config.toml:/app/config.toml anti-masking
     ```
+    要查看容器日志，可以使用 `docker logs <container_id_or_name>`。要停止容器，可以使用 `docker stop <container_id_or_name>`。
     应用程序将在 `http://localhost:8501` 上可用。
 
 ### 本地运行 (Python)
@@ -62,8 +63,14 @@ column = "your_column"
     source .venv/bin/activate
     ```
 
-2.  **运行 Streamlit 应用:**
+2.  **安装依赖 (如果尚未安装):**
+    ```bash
+    uv pip install -r requirements.txt
+    ```
+
+3.  **运行 Streamlit 应用:**
     ```bash
     streamlit run app.py
     ```
     应用程序将在 `http://localhost:8501` 上可用。
+

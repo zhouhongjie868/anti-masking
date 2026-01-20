@@ -1,0 +1,46 @@
+/* style.css */
+
+/* Adjust sidebar width */
+div[data-testid="stSidebar"] {
+    width: 200px !important;
+    min-width: 200px !important;
+}
+
+/* Hide the default radio buttons */
+div[role="radiogroup"] > label > div:first-child {
+    display: none;
+}
+
+/* Style the labels to look like buttons */
+div[role="radiogroup"] > label {
+    display: inline-block;
+    background-color: #f0f2f6;
+    color: #31333f;
+    padding: 8px 16px;
+    border-radius: 8px;
+    border: 1px solid #f0f2f6;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease-in-out;
+    width: 100%;
+    text-align: center;
+}
+
+/* Style for the selected "button" */
+div[role="radiogroup"] > label:has(input:checked) {
+    background-color: #1E90FF; /* A lighter shade of blue (DodgerBlue) */
+    color: white; /* Ensure text is white */
+    border-color: #1E90FF;
+}
+
+/* Hover effect */
+div[role="radiogroup"] > label:hover {
+    background-color: #e0e2e6;
+    border-color: #e0e2e6;
+}
+
+/* Hover effect for selected "button" */
+div[role="radiogroup"] > label:has(input:checked):hover {
+    background-color: #1C86EE; /* Slightly darker for hover */
+    border-color: #1C86EE;
+}
