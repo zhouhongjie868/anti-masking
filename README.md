@@ -36,6 +36,34 @@ password = ""
 database = "test"
 table = "your_table"
 column = "your_column"
+id_column = "your_id_column"
+log_table = "masking_replace_log"
+log_detail_table = "masking_replace_log_detail"
+```
+
+### 日志表结构（请先在数据库中创建）
+
+```sql
+CREATE TABLE masking_replace_log (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  batch_id VARCHAR(64) UNIQUE,
+  env_name VARCHAR(64),
+  operator VARCHAR(64),
+  mode VARCHAR(16),
+  created_at DATETIME,
+  total_rows INT,
+  status VARCHAR(16)
+);
+
+CREATE TABLE masking_replace_log_detail (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  batch_id VARCHAR(64),
+  row_id VARCHAR(128),
+  old_name TEXT,
+  new_name TEXT,
+  updated_at DATETIME,
+  INDEX idx_batch_id (batch_id)
+);
 ```
 
 ## 部署与运行
@@ -73,4 +101,3 @@ column = "your_column"
     streamlit run app.py
     ```
     应用程序将在 `http://localhost:8501` 上可用。
-
