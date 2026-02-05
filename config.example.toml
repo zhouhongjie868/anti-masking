@@ -1,4 +1,4 @@
-[environments.dev.database]
+[environments.dev.target_database]
 host = "127.0.0.1"
 port = 3306
 user = "root"
@@ -7,10 +7,17 @@ database = "fm_db_users"
 table = "user"
 column = "username"
 id_column = "user_id"
+
+[environments.dev.main_database]
+host = "127.0.0.1"
+port = 3306
+user = "root"
+password = "yansiqi0200"
+database = "anti_masking_main"
 log_table = "masking_replace_log"
 log_detail_table = "masking_replace_log_detail"
 
-[environments.prod.database]
+[environments.prod.target_database]
 host = "10.0.0.5"
 port = 3306
 user = "root"
@@ -19,5 +26,12 @@ database = "test_prod"
 table = "your_table"
 column = "your_column"
 id_column = "your_id_column"
+
+[environments.prod.main_database]
+host = "10.0.0.6"
+port = 3306
+user = "root"
+password = "your_password"
+database = "anti_masking_main"
 log_table = "masking_replace_log"
 log_detail_table = "masking_replace_log_detail"

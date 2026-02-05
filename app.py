@@ -58,7 +58,20 @@ def _require_log_config(db_config):
     return db_config.get("log_table"), db_config.get("log_detail_table")
 
 
-def single_replacement(db_config, env_name, operator):
+def _split_db_config(env_db_config):
+    """
+    Return (target_db, main_db).
+    Supports legacy [database] by using it for both.
+    """
+    target_db = env_db_config.get("target_database")
+    main_db = env_db_config.get("main_database")
+    legacy_db = env_db_config.get("database")
+    if not target_db and not main_db and legacy_db:
+        return legacy_db, legacy_db
+    return target_db or {}, main_db or {}
+
+
+def single_replacement(env_db_config, env_name, operator):
     """
     UI and logic for single name replacement.
     """
@@ -69,43 +82,71 @@ def single_replacement(db_config, env_name, operator):
     name_b = st.text_input("替换后的客户名")
 
     if st.button("执行单个替换"):
-        db_host = db_config.get("host")
-        db_port = db_config.get("port")
-        db_user = db_config.get("user")
-        db_password = db_config.get("password")
-        db_name = db_config.get("database")
-        db_table = db_config.get("table")
-        db_column = db_config.get("column")
-        id_column = db_config.get("id_column")
-        log_table, log_detail_table = _require_log_config(db_config)
+        target_db, main_db = _split_db_config(env_db_config)
+        target_host = target_db.get("host")
+        target_port = target_db.get("port")
+        target_user = target_db.get("user")
+        target_password = target_db.get("password")
+        target_name = target_db.get("database")
+        target_table = target_db.get("table")
+        target_column = target_db.get("column")
+        target_id_column = target_db.get("id_column")
 
-        if not all([db_host, db_port, db_user, db_name, db_table, db_column, name_b]):
-            st.error(
-                "请在 `config.toml` 中填写所有数据库详细信息，并在UI中填写替换后的客户名。"
-            )
+        main_host = main_db.get("host")
+        main_port = main_db.get("port")
+        main_user = main_db.get("user")
+        main_password = main_db.get("password")
+        main_name = main_db.get("database")
+        log_table, log_detail_table = _require_log_config(main_db)
+
+        if not all(
+            [
+                target_host,
+                target_port,
+                target_user,
+                target_name,
+                target_table,
+                target_column,
+                name_b,
+            ]
+        ):
+            st.error("请在 `config.toml` 中填写目标库的完整信息，并在UI中填写替换后的客户名。")
+        elif not all([target_id_column]):
+            st.error("请在 `config.toml` 中配置目标库的 `id_column`。")
+        elif not all([main_host, main_port, main_user, main_name]):
+            st.error("请在 `config.toml` 中填写主库的完整信息。")
         elif not all([log_table, log_detail_table]):
-            st.error("请在 `config.toml` 中配置日志表 `log_table` 和 `log_detail_table`。")
+            st.error("请在 `config.toml` 中配置主库日志表 `log_table` 和 `log_detail_table`。")
         elif not operator:
             st.error("操作人不能为空，请在侧边栏填写。")
         elif not id_val and not name_a:
             st.error("ID 和原客户名必须至少填写一个。")
         else:
-            conn = None
+            conn_target = None
+            conn_main = None
             try:
-                conn = mysql.connector.connect(
-                    host=db_host,
-                    port=int(db_port),
-                    user=db_user,
-                    password=db_password,
-                    database=db_name,
+                conn_main = mysql.connector.connect(
+                    host=main_host,
+                    port=int(main_port),
+                    user=main_user,
+                    password=main_password,
+                    database=main_name,
+                )
+                conn_target = mysql.connector.connect(
+                    host=target_host,
+                    port=int(target_port),
+                    user=target_user,
+                    password=target_password,
+                    database=target_name,
                 )
 
-                cursor = conn.cursor()
+                cursor_main = conn_main.cursor()
+                cursor_target = conn_target.cursor()
                 where_clause = ""
                 params = []
-                safe_table = _safe_ident(db_table)
-                safe_column = _safe_ident(db_column)
-                safe_id_column = _safe_ident(id_column)
+                safe_table = _safe_ident(target_table)
+                safe_column = _safe_ident(target_column)
+                safe_id_column = _safe_ident(target_id_column)
                 safe_log_table = _safe_ident(log_table)
                 safe_log_detail_table = _safe_ident(log_detail_table)
 
@@ -118,63 +159,71 @@ def single_replacement(db_config, env_name, operator):
 
                 batch_id = _new_batch_id()
                 _insert_batch_log(
-                    cursor, safe_log_table, batch_id, env_name, operator, "single"
+                    cursor_main, safe_log_table, batch_id, env_name, operator, "single"
                 )
-                conn.commit()
+                conn_main.commit()
 
                 select_query = (
                     f"SELECT `{safe_id_column}`, `{safe_column}` "
                     f"FROM `{safe_table}` WHERE {where_clause}"
                 )
-                cursor.execute(select_query, tuple(params))
-                rows = cursor.fetchall()
+                cursor_target.execute(select_query, tuple(params))
+                rows = cursor_target.fetchall()
                 details = [
                     (batch_id, str(row[0]), row[1], name_b, _now_str()) for row in rows
                 ]
-                _insert_detail_logs(cursor, safe_log_detail_table, batch_id, details)
-                conn.commit()
+                _insert_detail_logs(
+                    cursor_main, safe_log_detail_table, batch_id, details
+                )
+                conn_main.commit()
 
                 query = (
                     f"UPDATE `{safe_table}` SET `{safe_column}` = %s WHERE {where_clause}"
                 )
                 params.insert(0, name_b)
 
-                cursor.execute(query, tuple(params))
-                conn.commit()
+                cursor_target.execute(query, tuple(params))
+                conn_target.commit()
 
                 _update_batch_log(
-                    cursor, safe_log_table, batch_id, len(rows), "done"
+                    cursor_main, safe_log_table, batch_id, len(rows), "done"
                 )
-                conn.commit()
+                conn_main.commit()
 
                 if len(rows) == 0:
                     st.warning("未匹配到任何记录，已记录本次操作。")
                 else:
-                    st.success(f"成功更新了 {cursor.rowcount} 条记录。")
+                    st.success(f"成功更新了 {cursor_target.rowcount} 条记录。")
 
             except mysql.connector.Error as err:
                 try:
-                    if conn and conn.is_connected():
-                        cursor = conn.cursor()
-                        _update_batch_log(cursor, safe_log_table, batch_id, 0, "failed")
-                        conn.commit()
+                    if conn_main and conn_main.is_connected():
+                        cursor_main = conn_main.cursor()
+                        _update_batch_log(
+                            cursor_main, safe_log_table, batch_id, 0, "failed"
+                        )
+                        conn_main.commit()
                 except Exception:
                     pass
                 handle_db_error(err)
             finally:
-                if conn and conn.is_connected():
-                    cursor.close()
-                    conn.close()
+                if conn_target and conn_target.is_connected():
+                    cursor_target.close()
+                    conn_target.close()
+                if conn_main and conn_main.is_connected():
+                    cursor_main.close()
+                    conn_main.close()
 
 
-def batch_replacement(db_config, env_name, operator):
+def batch_replacement(env_db_config, env_name, operator):
     """
     UI and logic for batch name replacement.
     """
     st.header(f"批量替换 - {env_name}")
     st.write("下载Excel模板，填写后上传以进行批量替换。")
 
-    id_column_name = db_config.get("id_column", "ID")
+    target_db, main_db = _split_db_config(env_db_config)
+    id_column_name = target_db.get("id_column", "ID")
     template_df = pd.DataFrame(
         {
             id_column_name: ["示例ID1", "示例ID2"],
@@ -204,22 +253,38 @@ def batch_replacement(db_config, env_name, operator):
             edited_df = st.data_editor(df, num_rows="dynamic")
 
             if st.button("执行批量替换"):
-                db_host = db_config.get("host")
-                db_port = db_config.get("port")
-                db_user = db_config.get("user")
-                db_password = db_config.get("password")
-                db_name = db_config.get("database")
-                db_table = db_config.get("table")
-                db_column = db_config.get("column")
-                id_column = db_config.get("id_column")
-                log_table, log_detail_table = _require_log_config(db_config)
+                target_host = target_db.get("host")
+                target_port = target_db.get("port")
+                target_user = target_db.get("user")
+                target_password = target_db.get("password")
+                target_name = target_db.get("database")
+                target_table = target_db.get("table")
+                target_column = target_db.get("column")
+                target_id_column = target_db.get("id_column")
+
+                main_host = main_db.get("host")
+                main_port = main_db.get("port")
+                main_user = main_db.get("user")
+                main_password = main_db.get("password")
+                main_name = main_db.get("database")
+                log_table, log_detail_table = _require_log_config(main_db)
 
                 if not all(
-                    [db_host, db_port, db_user, db_name, db_table, db_column, id_column]
+                    [
+                        target_host,
+                        target_port,
+                        target_user,
+                        target_name,
+                        target_table,
+                        target_column,
+                        target_id_column,
+                    ]
                 ):
-                    st.error("请在 `config.toml` 中填写所有数据库详细信息。")
+                    st.error("请在 `config.toml` 中填写目标库的完整信息。")
+                elif not all([main_host, main_port, main_user, main_name]):
+                    st.error("请在 `config.toml` 中填写主库的完整信息。")
                 elif not all([log_table, log_detail_table]):
-                    st.error("请在 `config.toml` 中配置日志表 `log_table` 和 `log_detail_table`。")
+                    st.error("请在 `config.toml` 中配置主库日志表 `log_table` 和 `log_detail_table`。")
                 elif not operator:
                     st.error("操作人不能为空，请在侧边栏填写。")
                 elif edited_df.empty:
@@ -232,30 +297,44 @@ def batch_replacement(db_config, env_name, operator):
                         f"Excel文件必须包含 '{id_column_name}' 或 '原客户名' 列，以及 '替换后客户名' 列。"
                     )
                 else:
-                    conn = None
+                    conn_target = None
+                    conn_main = None
                     try:
-                        conn = mysql.connector.connect(
-                            host=db_host,
-                            port=int(db_port),
-                            user=db_user,
-                            password=db_password,
-                            database=db_name,
+                        conn_main = mysql.connector.connect(
+                            host=main_host,
+                            port=int(main_port),
+                            user=main_user,
+                            password=main_password,
+                            database=main_name,
                         )
-                        cursor = conn.cursor()
+                        conn_target = mysql.connector.connect(
+                            host=target_host,
+                            port=int(target_port),
+                            user=target_user,
+                            password=target_password,
+                            database=target_name,
+                        )
+                        cursor_main = conn_main.cursor()
+                        cursor_target = conn_target.cursor()
                         total_replaced_count = 0
                         st.write("开始批量替换...")
                         progress_bar = st.progress(0)
-                        safe_table = _safe_ident(db_table)
-                        safe_column = _safe_ident(db_column)
-                        safe_id_column = _safe_ident(id_column)
+                        safe_table = _safe_ident(target_table)
+                        safe_column = _safe_ident(target_column)
+                        safe_id_column = _safe_ident(target_id_column)
                         safe_log_table = _safe_ident(log_table)
                         safe_log_detail_table = _safe_ident(log_detail_table)
 
                         batch_id = _new_batch_id()
                         _insert_batch_log(
-                            cursor, safe_log_table, batch_id, env_name, operator, "batch"
+                            cursor_main,
+                            safe_log_table,
+                            batch_id,
+                            env_name,
+                            operator,
+                            "batch",
                         )
-                        conn.commit()
+                        conn_main.commit()
                         total_logged_rows = 0
 
                         for i, row in edited_df.iterrows():
@@ -287,16 +366,16 @@ def batch_replacement(db_config, env_name, operator):
                                 f"SELECT `{safe_id_column}`, `{safe_column}` "
                                 f"FROM `{safe_table}` WHERE {where_clause}"
                             )
-                            cursor.execute(select_query, tuple(params))
-                            rows = cursor.fetchall()
+                            cursor_target.execute(select_query, tuple(params))
+                            rows = cursor_target.fetchall()
                             details = [
                                 (batch_id, str(r[0]), r[1], new_name, _now_str())
                                 for r in rows
                             ]
                             _insert_detail_logs(
-                                cursor, safe_log_detail_table, batch_id, details
+                                cursor_main, safe_log_detail_table, batch_id, details
                             )
-                            conn.commit()
+                            conn_main.commit()
                             total_logged_rows += len(rows)
 
                             query = (
@@ -305,84 +384,120 @@ def batch_replacement(db_config, env_name, operator):
                             )
                             params.insert(0, new_name)
 
-                            cursor.execute(query, tuple(params))
-                            conn.commit()
-                            total_replaced_count += cursor.rowcount
+                            cursor_target.execute(query, tuple(params))
+                            conn_target.commit()
+                            total_replaced_count += cursor_target.rowcount
 
                             progress_bar.progress((i + 1) / len(edited_df))
 
                         _update_batch_log(
-                            cursor, safe_log_table, batch_id, total_logged_rows, "done"
+                            cursor_main,
+                            safe_log_table,
+                            batch_id,
+                            total_logged_rows,
+                            "done",
                         )
-                        conn.commit()
+                        conn_main.commit()
 
                         st.success(
                             f"批量替换完成！共替换了 {total_replaced_count} 条记录。"
                         )
                     except mysql.connector.Error as err:
                         try:
-                            if conn and conn.is_connected():
-                                cursor = conn.cursor()
+                            if conn_main and conn_main.is_connected():
+                                cursor_main = conn_main.cursor()
                                 _update_batch_log(
-                                    cursor, safe_log_table, batch_id, 0, "failed"
+                                    cursor_main, safe_log_table, batch_id, 0, "failed"
                                 )
-                                conn.commit()
+                                conn_main.commit()
                         except Exception:
                             pass
                         handle_db_error(err)
                     except Exception as e:
                         st.error(f"发生未知错误: {e}")
                     finally:
-                        if conn and conn.is_connected():
-                            cursor.close()
-                            conn.close()
+                        if conn_target and conn_target.is_connected():
+                            cursor_target.close()
+                            conn_target.close()
+                        if conn_main and conn_main.is_connected():
+                            cursor_main.close()
+                            conn_main.close()
         except Exception as e:
             st.error(f"读取Excel文件失败: {e}")
 
 
-def rollback_records(db_config, env_name):
+def rollback_records(env_db_config, env_name):
     """
     UI and logic for rollback by batch.
     """
     st.header(f"回退记录 - {env_name}")
-    db_host = db_config.get("host")
-    db_port = db_config.get("port")
-    db_user = db_config.get("user")
-    db_password = db_config.get("password")
-    db_name = db_config.get("database")
-    db_table = db_config.get("table")
-    db_column = db_config.get("column")
-    id_column = db_config.get("id_column")
-    log_table, log_detail_table = _require_log_config(db_config)
+    target_db, main_db = _split_db_config(env_db_config)
+    target_host = target_db.get("host")
+    target_port = target_db.get("port")
+    target_user = target_db.get("user")
+    target_password = target_db.get("password")
+    target_name = target_db.get("database")
+    target_table = target_db.get("table")
+    target_column = target_db.get("column")
+    target_id_column = target_db.get("id_column")
 
-    if not all([db_host, db_port, db_user, db_name, db_table, db_column, id_column]):
-        st.error("请在 `config.toml` 中填写所有数据库详细信息。")
+    main_host = main_db.get("host")
+    main_port = main_db.get("port")
+    main_user = main_db.get("user")
+    main_password = main_db.get("password")
+    main_name = main_db.get("database")
+    log_table, log_detail_table = _require_log_config(main_db)
+
+    if not all(
+        [
+            target_host,
+            target_port,
+            target_user,
+            target_name,
+            target_table,
+            target_column,
+            target_id_column,
+        ]
+    ):
+        st.error("请在 `config.toml` 中填写目标库的完整信息。")
+        return
+    if not all([main_host, main_port, main_user, main_name]):
+        st.error("请在 `config.toml` 中填写主库的完整信息。")
         return
     if not all([log_table, log_detail_table]):
-        st.error("请在 `config.toml` 中配置日志表 `log_table` 和 `log_detail_table`。")
+        st.error("请在 `config.toml` 中配置主库日志表 `log_table` 和 `log_detail_table`。")
         return
 
-    conn = None
+    conn_target = None
+    conn_main = None
     try:
-        conn = mysql.connector.connect(
-            host=db_host,
-            port=int(db_port),
-            user=db_user,
-            password=db_password,
-            database=db_name,
+        conn_main = mysql.connector.connect(
+            host=main_host,
+            port=int(main_port),
+            user=main_user,
+            password=main_password,
+            database=main_name,
         )
-        cursor = conn.cursor()
+        conn_target = mysql.connector.connect(
+            host=target_host,
+            port=int(target_port),
+            user=target_user,
+            password=target_password,
+            database=target_name,
+        )
+        cursor_main = conn_main.cursor()
+        cursor_target = conn_target.cursor()
         safe_log_table = _safe_ident(log_table)
         safe_log_detail_table = _safe_ident(log_detail_table)
-        safe_table = _safe_ident(db_table)
-        safe_column = _safe_ident(db_column)
-        safe_id_column = _safe_ident(id_column)
+        safe_table = _safe_ident(target_table)
+        safe_column = _safe_ident(target_column)
+        safe_id_column = _safe_ident(target_id_column)
 
-        cursor.execute(
+        cursor_main.execute(
             f"SELECT batch_id, operator, mode, created_at, total_rows, status "
             f"FROM `{safe_log_table}` ORDER BY created_at DESC LIMIT 50"
         )
-        batches = cursor.fetchall()
+        batches = cursor_main.fetchall()
         if not batches:
             st.info("暂无日志记录。")
             return
@@ -404,12 +519,12 @@ def rollback_records(db_config, env_name):
         batch_ids = batch_df["batch_id"].tolist()
         selected_batch = st.selectbox("选择要回退的批次", batch_ids, index=0)
 
-        cursor.execute(
+        cursor_main.execute(
             f"SELECT row_id, old_name, new_name, updated_at "
             f"FROM `{safe_log_detail_table}` WHERE batch_id = %s",
             (selected_batch,),
         )
-        details = cursor.fetchall()
+        details = cursor_main.fetchall()
         detail_df = pd.DataFrame(
             details, columns=["row_id", "old_name", "new_name", "updated_at"]
         )
@@ -425,22 +540,22 @@ def rollback_records(db_config, env_name):
             success_count = 0
             fail_count = 0
             for row_id, old_name, _new_name, _updated_at in details:
-                cursor.execute(
+                cursor_target.execute(
                     f"UPDATE `{safe_table}` SET `{safe_column}` = %s "
                     f"WHERE `{safe_id_column}` = %s",
                     (old_name, row_id),
                 )
-                conn.commit()
-                if cursor.rowcount > 0:
+                conn_target.commit()
+                if cursor_target.rowcount > 0:
                     success_count += 1
                 else:
                     fail_count += 1
 
-            cursor.execute(
+            cursor_main.execute(
                 f"UPDATE `{safe_log_table}` SET status = %s WHERE batch_id = %s",
                 ("rollback", selected_batch),
             )
-            conn.commit()
+            conn_main.commit()
             st.success(
                 f"回退完成：成功 {success_count} 条，失败 {fail_count} 条。"
             )
@@ -450,9 +565,12 @@ def rollback_records(db_config, env_name):
     except Exception as e:
         st.error(f"发生未知错误: {e}")
     finally:
-        if conn and conn.is_connected():
-            cursor.close()
-            conn.close()
+        if conn_target and conn_target.is_connected():
+            cursor_target.close()
+            conn_target.close()
+        if conn_main and conn_main.is_connected():
+            cursor_main.close()
+            conn_main.close()
 
 
 def handle_db_error(err):
@@ -479,7 +597,10 @@ def local_css(file_name):
 def _load_db_config():
     """
     Load database config(s) from config.toml.
-    Supports single [database] or multi [environments.<name>.database].
+    Supports:
+      - legacy [database]
+      - [environments.<name>.database]
+      - [environments.<name>.target_database] + [environments.<name>.main_database]
     Returns: (env_names, env_to_db_config)
     """
     config = toml.load("config.toml")
@@ -488,12 +609,16 @@ def _load_db_config():
         envs = config.get("environments", {})
         env_to_db = {}
         for name, env_cfg in envs.items():
-            env_to_db[name] = env_cfg.get("database", {})
+            env_to_db[name] = {
+                "database": env_cfg.get("database", {}),
+                "target_database": env_cfg.get("target_database", {}),
+                "main_database": env_cfg.get("main_database", {}),
+            }
         env_names = list(env_to_db.keys())
         return env_names, env_to_db
 
     # Backward compatible single environment
-    return ["default"], {"default": config.get("database", {})}
+    return ["default"], {"default": {"database": config.get("database", {})}}
 
 
 def main():

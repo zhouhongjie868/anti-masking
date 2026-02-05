@@ -25,10 +25,10 @@
 
 ## 配置
 
-在运行应用之前，需要创建一个 `config.toml` 文件来配置数据库连接。可以将 `config.example.toml` 复制一份并重命名为 `config.toml`，然后修改其中的配置项。
+在运行应用之前，需要创建一个 `config.toml` 文件来配置数据库连接。可以将 `config.example.toml` 复制一份并重命名为 `config.toml`，然后修改其中的配置项。目标库用于更新客户名，主库用于写入日志与回退记录。
 
 ```toml
-[database]
+[environments.dev.target_database]
 host = "127.0.0.1"
 port = 3306
 user = "root"
@@ -37,6 +37,13 @@ database = "test"
 table = "your_table"
 column = "your_column"
 id_column = "your_id_column"
+
+[environments.dev.main_database]
+host = "127.0.0.1"
+port = 3306
+user = "root"
+password = ""
+database = "anti_masking_main"
 log_table = "masking_replace_log"
 log_detail_table = "masking_replace_log_detail"
 ```
